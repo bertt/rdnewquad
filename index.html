@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NetherlandsRDNewQuad Tiling Schema Viewer</title>
+
+  <!-- OpenLayers -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@9.2.4/dist/ol.css" />
+  <script src="https://cdn.jsdelivr.net/npm/ol@9.2.4/dist/ol.js"></script>
+
+  <!-- proj4 for EPSG:28992 -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.11.0/proj4.js"></script>
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; overflow: hidden; }
+    #map { width: 100%; height: 100%; }
+
+    /* Controls: stacked top-right */
+    .ol-zoom {
+      top: 0.5em;
+      right: 0.5em;
+      left: auto;
+    }
+    .ol-zoom .ol-zoom-in,
+    .ol-zoom .ol-zoom-out {
+      width: 1.8em;
+      height: 1.8em;
+      font-size: 1.1em;
+      line-height: 1.8em;
+      margin-bottom: 2px;
+    }
+    .ol-full-screen {
+      top: 5em;
+      right: 0.5em;
+    }
+    .ol-full-screen button {
+      width: 1.8em;
+      height: 1.8em;
+      font-size: 1.1em;
+    }
+
+    #title {
+      position: absolute;
+      top: 0.5em;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 20;
+      background: rgba(255, 255, 255, 0.85);
+      padding: 0.4em 1em;
+      border-radius: 4px;
+      font-family: Arial, sans-serif;
+      font-size: 15px;
+      font-weight: bold;
+      color: #222;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+      white-space: nowrap;
+    }
+
+    #tile-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      pointer-events: none;
+      z-index: 10;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="title">
+    NetherlandsRDNewQuad Tiling Schema —
+    <a href="https://api.pdok.nl/kadaster/brk-kadastrale-kaart/ogc/v1/tileMatrixSets/NetherlandsRDNewQuad"
+       target="_blank" rel="noopener"
+       style="color:#0066cc;">api.pdok.nl &hellip; NetherlandsRDNewQuad</a>
+  </div>
+  <canvas id="tile-overlay"></canvas>
+
+  <script>
+    // ─── 1. EPSG:28992 (Amersfoort / RD New) ────────────────────────────────
+    proj4.defs(
+      'EPSG:28992',
+      '+proj=sterea +lat_0=52.15616055555555 +lon_0=5.38720621111111 ' +
+      '+k=0.9999079 +x_0=155000 +y_0=463000 +ellps=bessel ' +
+      '+towgs84=565.417,50.3319,465.552,-0.398957,0.343988,-1.8774,4.0725 ' +
+      '+units=m +no_defs'
+    );
+    ol.proj.proj4.register(proj4);
+
+    const rdProjection = ol.proj.get('EPSG:28992');
+    rdProjection.setExtent([-285401.92, 22598.08, 595401.92, 903401.92]);
+
+    // ─── 2. NetherlandsRDNewQuad tile grid ──────────────────────────────────
+    // origin = top-left corner of the tile grid
+    const ORIGIN = [-285401.92, 903401.92];
+
+    // resolutions (meters/pixel) per zoom level 0-13
+    const RESOLUTIONS = [
+      3440.64,  // z0
+      1720.32,  // z1
+      860.16,   // z2
+      430.08,   // z3
+      215.04,   // z4
+      107.52,   // z5
+       53.76,   // z6
+       26.88,   // z7
+       13.44,   // z8
+        6.72,   // z9
+        3.36,   // z10
+        1.68,   // z11
+        0.84,   // z12
+        0.42,   // z13
+    ];
+
+    // WMTS matrix IDs used by PDOK (EPSG:28992:0 … EPSG:28992:13)
+    const MATRIX_IDS = RESOLUTIONS.map((_, i) => `EPSG:28992:${i}`);
+
+    const wmtsTileGrid = new ol.tilegrid.WMTS({
+      origin: ORIGIN,
+      resolutions: RESOLUTIONS,
+      matrixIds: MATRIX_IDS,
+      tileSize: 256,
+    });
+
+    // ─── 3. PDOK BRT Achtergrondkaart WMTS ──────────────────────────────────
+    const pdokSource = new ol.source.WMTS({
+      url: 'https://service.pdok.nl/brt/achtergrondkaart/wmts/v2_0',
+      layer: 'standaard',
+      matrixSet: 'EPSG:28992',
+      format: 'image/png',
+      projection: rdProjection,
+      tileGrid: wmtsTileGrid,
+      style: 'default',
+      wrapX: false,
+    });
+
+    // ─── 4. Map ──────────────────────────────────────────────────────────────
+    const map = new ol.Map({
+      target: 'map',
+      layers: [
+        new ol.layer.Tile({ source: pdokSource }),
+      ],
+      view: new ol.View({
+        projection: rdProjection,
+        center: [155000, 463000], // Amersfoort / midden Nederland
+        zoom: 3,
+        resolutions: RESOLUTIONS,
+        constrainResolution: true,
+      }),
+      controls: ol.control.defaults.defaults({
+        zoom: true,
+        attribution: false,
+      }).extend([
+        new ol.control.FullScreen(),
+      ]),
+    });
+
+    // ─── 5. Tile overlay canvas ──────────────────────────────────────────────
+    const overlayCanvas = document.getElementById('tile-overlay');
+
+    // Keep the overlay canvas aligned with the map viewport
+    function syncCanvas() {
+      const mapEl = document.getElementById('map');
+      overlayCanvas.style.top  = mapEl.offsetTop  + 'px';
+      overlayCanvas.style.left = mapEl.offsetLeft + 'px';
+    }
+    syncCanvas();
+
+    function findZoomLevel(resolution) {
+      let best = 0;
+      let minDiff = Infinity;
+      for (let i = 0; i < RESOLUTIONS.length; i++) {
+        const diff = Math.abs(resolution - RESOLUTIONS[i]);
+        if (diff < minDiff) { minDiff = diff; best = i; }
+      }
+      return best;
+    }
+
+    function drawTileOverlay() {
+      const size = map.getSize();
+      if (!size) return;
+
+      overlayCanvas.width  = size[0];
+      overlayCanvas.height = size[1];
+
+      const ctx = overlayCanvas.getContext('2d');
+      ctx.clearRect(0, 0, size[0], size[1]);
+
+      const view       = map.getView();
+      const resolution = view.getResolution();
+      const zoomLevel  = findZoomLevel(resolution);
+
+      const tileSizeMeters = 256 * RESOLUTIONS[zoomLevel];
+      const extent         = view.calculateExtent(size); // [minX, minY, maxX, maxY]
+
+      // Tile column / row range that covers the current extent
+      const colMin = Math.floor((extent[0] - ORIGIN[0]) / tileSizeMeters);
+      const colMax = Math.floor((extent[2] - ORIGIN[0]) / tileSizeMeters);
+      const rowMin = Math.floor((ORIGIN[1] - extent[3]) / tileSizeMeters);
+      const rowMax = Math.floor((ORIGIN[1] - extent[1]) / tileSizeMeters);
+
+      for (let col = Math.max(0, colMin); col <= colMax; col++) {
+        for (let row = Math.max(0, rowMin); row <= rowMax; row++) {
+
+          // Tile corners in map (RD) coordinates
+          const tileLeft   = ORIGIN[0] + col * tileSizeMeters;
+          const tileRight  = tileLeft  + tileSizeMeters;
+          const tileTop    = ORIGIN[1] - row * tileSizeMeters;
+          const tileBottom = tileTop   - tileSizeMeters;
+
+          // Map coordinates → screen pixels
+          const topLeft     = map.getPixelFromCoordinate([tileLeft,  tileTop]);
+          const bottomRight = map.getPixelFromCoordinate([tileRight, tileBottom]);
+          if (!topLeft || !bottomRight) continue;
+
+          const px = Math.round(topLeft[0]);
+          const py = Math.round(topLeft[1]);
+          const pw = Math.round(bottomRight[0]) - px;
+          const ph = Math.round(bottomRight[1]) - py;
+
+          // ── Checkerboard fill ────────────────────────────────────────────
+          if ((col + row) % 2 === 0) {
+            ctx.fillStyle = 'rgba(130, 130, 130, 0.28)';
+            ctx.fillRect(px, py, pw, ph);
+          }
+
+          // ── Tile border ──────────────────────────────────────────────────
+          ctx.strokeStyle = 'rgba(60, 60, 60, 0.5)';
+          ctx.lineWidth   = 1;
+          ctx.strokeRect(px + 0.5, py + 0.5, pw - 1, ph - 1);
+
+          // ── Labels ───────────────────────────────────────────────────────
+          // Skip labels when tiles are too small to be readable
+          if (pw < 50 || ph < 45) continue;
+
+          const cx = px + pw / 2;
+          const cy = py + ph / 2;
+
+          const lines      = [`Zoom: ${zoomLevel}`, `X: ${col}`, `Y: ${row}`];
+          const lineHeight = Math.min(20, Math.floor(ph / 5));
+          const fontSize   = Math.max(9, lineHeight - 4);
+
+          ctx.font          = `bold ${fontSize}px Arial, sans-serif`;
+          ctx.textAlign     = 'center';
+          ctx.textBaseline  = 'middle';
+          ctx.lineJoin      = 'round';
+          ctx.miterLimit    = 2;
+
+          const totalH = lines.length * lineHeight;
+          lines.forEach((line, i) => {
+            const y = cy - totalH / 2 + i * lineHeight + lineHeight / 2;
+            // Black outline
+            ctx.lineWidth   = Math.max(3, fontSize * 0.3);
+            ctx.strokeStyle = 'black';
+            ctx.strokeText(line, cx, y);
+            // White fill
+            ctx.fillStyle = 'white';
+            ctx.fillText(line, cx, y);
+          });
+        }
+      }
+    }
+
+    // Redraw after every render cycle (covers zoom, pan, resize)
+    map.on('postrender', drawTileOverlay);
+
+    // Also keep canvas size in sync on window resize
+    window.addEventListener('resize', () => {
+      syncCanvas();
+      drawTileOverlay();
+    });
+  </script>
+</body>
+</html>
