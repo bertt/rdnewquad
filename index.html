@@ -58,6 +58,49 @@
       white-space: nowrap;
     }
 
+    #tile-popup {
+      display: none;
+      position: absolute;
+      z-index: 30;
+      background: #fff;
+      border: 1px solid #ccc;
+      border-radius: 5px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      font-family: Arial, sans-serif;
+      font-size: 13px;
+      min-width: 210px;
+      padding: 0;
+      pointer-events: all;
+    }
+    #tile-popup-header {
+      background: #2c6fad;
+      color: #fff;
+      font-weight: bold;
+      padding: 0.4em 0.7em;
+      border-radius: 4px 4px 0 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    #tile-popup-close {
+      cursor: pointer;
+      font-size: 1.1em;
+      line-height: 1;
+      background: none;
+      border: none;
+      color: #fff;
+      padding: 0 0.2em;
+    }
+    #tile-popup-close:hover { opacity: 0.7; }
+    #tile-popup-body {
+      padding: 0.6em 0.8em;
+      line-height: 1.8;
+    }
+    #tile-popup-body table { border-collapse: collapse; width: 100%; }
+    #tile-popup-body td { padding: 1px 4px; }
+    #tile-popup-body td:first-child { color: #555; font-weight: bold; white-space: nowrap; }
+    #tile-popup-body td:last-child { font-family: monospace; text-align: right; }
+
     #tile-overlay {
       position: absolute;
       top: 0;
@@ -76,6 +119,26 @@
        style="color:#0066cc;">api.pdok.nl &hellip; NetherlandsRDNewQuad</a>
   </div>
   <canvas id="tile-overlay"></canvas>
+
+  <!-- Tile info popup -->
+  <div id="tile-popup">
+    <div id="tile-popup-header">
+      <span id="tile-popup-title">Tile info</span>
+      <button id="tile-popup-close" title="Close">&times;</button>
+    </div>
+    <div id="tile-popup-body">
+      <table>
+        <tr><td>Zoom:</td><td id="pp-zoom"></td></tr>
+        <tr><td>Col (X):</td><td id="pp-col"></td></tr>
+        <tr><td>Row (Y):</td><td id="pp-row"></td></tr>
+        <tr><td colspan="2"><hr style="margin:4px 0;border:none;border-top:1px solid #eee"/></td></tr>
+        <tr><td>X min:</td><td id="pp-xmin"></td></tr>
+        <tr><td>Y min:</td><td id="pp-ymin"></td></tr>
+        <tr><td>X max:</td><td id="pp-xmax"></td></tr>
+        <tr><td>Y max:</td><td id="pp-ymax"></td></tr>
+      </table>
+    </div>
+  </div>
 
   <script>
     // ─── 1. EPSG:28992 (Amersfoort / RD New) ────────────────────────────────
@@ -262,8 +325,69 @@
       }
     }
 
+    // ─── 6. Tile click → popup ───────────────────────────────────────────────
+    const popup   = document.getElementById('tile-popup');
+    const ppClose = document.getElementById('tile-popup-close');
+
+    // Anchor: the RD coordinate the popup is pinned to (tile top-left corner)
+    let popupAnchor = null;
+
+    function positionPopup() {
+      if (!popupAnchor || popup.style.display === 'none') return;
+      const pixel  = map.getPixelFromCoordinate(popupAnchor);
+      if (!pixel) return;
+      const mapEl  = document.getElementById('map');
+      const popupW = popup.offsetWidth  || 220;
+      const popupH = popup.offsetHeight || 200;
+      let left = pixel[0] + 12;
+      let top  = pixel[1] + 12;
+      if (left + popupW > mapEl.offsetWidth)  left = pixel[0] - popupW - 12;
+      if (top  + popupH > mapEl.offsetHeight) top  = pixel[1] - popupH - 12;
+      popup.style.left = left + 'px';
+      popup.style.top  = top  + 'px';
+    }
+
+    ppClose.addEventListener('click', () => {
+      popup.style.display = 'none';
+      popupAnchor = null;
+    });
+
+    map.on('click', function (evt) {
+      const coord      = evt.coordinate; // RD meters
+      const view       = map.getView();
+      const resolution = view.getResolution();
+      const zoomLevel  = findZoomLevel(resolution);
+
+      const tileSizeMeters = 256 * RESOLUTIONS[zoomLevel];
+
+      const col = Math.floor((coord[0] - ORIGIN[0]) / tileSizeMeters);
+      const row = Math.floor((ORIGIN[1] - coord[1]) / tileSizeMeters);
+
+      if (col < 0 || row < 0) return; // outside grid
+
+      const xMin = ORIGIN[0] + col * tileSizeMeters;
+      const xMax = xMin + tileSizeMeters;
+      const yMax = ORIGIN[1] - row * tileSizeMeters;
+      const yMin = yMax - tileSizeMeters;
+
+      const fmt = v => v.toFixed(2) + ' m';
+
+      document.getElementById('pp-zoom').textContent = zoomLevel;
+      document.getElementById('pp-col').textContent  = col;
+      document.getElementById('pp-row').textContent  = row;
+      document.getElementById('pp-xmin').textContent = fmt(xMin);
+      document.getElementById('pp-ymin').textContent = fmt(yMin);
+      document.getElementById('pp-xmax').textContent = fmt(xMax);
+      document.getElementById('pp-ymax').textContent = fmt(yMax);
+
+      // Pin popup to the top-left corner of the clicked tile
+      popupAnchor = [xMin, yMax];
+      popup.style.display = 'block';
+      positionPopup();
+    });
+
     // Redraw after every render cycle (covers zoom, pan, resize)
-    map.on('postrender', drawTileOverlay);
+    map.on('postrender', () => { drawTileOverlay(); positionPopup(); });
 
     // Also keep canvas size in sync on window resize
     window.addEventListener('resize', () => {
