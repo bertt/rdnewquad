@@ -17,28 +17,32 @@
     html, body { width: 100%; height: 100%; overflow: hidden; }
     #map { width: 100%; height: 100%; }
 
-    /* Controls: stacked top-right */
-    .ol-zoom {
+    /* Controls: forced top-right */
+    #map-controls {
+      position: absolute;
       top: 0.5em;
       right: 0.5em;
-      left: auto;
+      z-index: 40;
+      display: flex;
+      flex-direction: column;
+      gap: 0.35em;
+      pointer-events: none;
     }
-    .ol-zoom .ol-zoom-in,
-    .ol-zoom .ol-zoom-out {
+    #map-controls .ol-control {
+      position: static;
+      margin: 0;
+      pointer-events: all;
+    }
+    #map-controls .ol-zoom .ol-zoom-in,
+    #map-controls .ol-zoom .ol-zoom-out,
+    #map-controls .ol-full-screen button {
       width: 1.8em;
       height: 1.8em;
       font-size: 1.1em;
       line-height: 1.8em;
+    }
+    #map-controls .ol-zoom .ol-zoom-in {
       margin-bottom: 2px;
-    }
-    .ol-full-screen {
-      top: 5em;
-      right: 0.5em;
-    }
-    .ol-full-screen button {
-      width: 1.8em;
-      height: 1.8em;
-      font-size: 1.1em;
     }
 
     #title {
@@ -112,6 +116,7 @@
 </head>
 <body>
   <div id="map"></div>
+  <div id="map-controls"></div>
   <div id="title">
     NetherlandsRDNewQuad Tiling Schema —
     <a href="https://api.pdok.nl/kadaster/brk-kadastrale-kaart/ogc/v1/tileMatrixSets/NetherlandsRDNewQuad"
@@ -199,6 +204,8 @@
     });
 
     // ─── 4. Map ──────────────────────────────────────────────────────────────
+    const controlsTarget = document.getElementById('map-controls');
+
     const map = new ol.Map({
       target: 'map',
       layers: [
@@ -210,12 +217,15 @@
         zoom: 3,
         resolutions: RESOLUTIONS,
         constrainResolution: true,
+        enableRotation: false,
       }),
       controls: ol.control.defaults.defaults({
-        zoom: true,
+        zoom: false,
         attribution: false,
+        rotate: false,
       }).extend([
-        new ol.control.FullScreen(),
+        new ol.control.Zoom({ target: controlsTarget }),
+        new ol.control.FullScreen({ target: controlsTarget }),
       ]),
     });
 
@@ -240,6 +250,10 @@
       return best;
     }
 
+    function getMaxTileIndex(zoomLevel) {
+      return Math.pow(2, zoomLevel) - 1;
+    }
+
     function drawTileOverlay() {
       const size = map.getSize();
       if (!size) return;
@@ -262,9 +276,14 @@
       const colMax = Math.floor((extent[2] - ORIGIN[0]) / tileSizeMeters);
       const rowMin = Math.floor((ORIGIN[1] - extent[3]) / tileSizeMeters);
       const rowMax = Math.floor((ORIGIN[1] - extent[1]) / tileSizeMeters);
+      const maxTileIndex = getMaxTileIndex(zoomLevel);
+      const drawColMin = Math.max(0, colMin);
+      const drawColMax = Math.min(maxTileIndex, colMax);
+      const drawRowMin = Math.max(0, rowMin);
+      const drawRowMax = Math.min(maxTileIndex, rowMax);
 
-      for (let col = Math.max(0, colMin); col <= colMax; col++) {
-        for (let row = Math.max(0, rowMin); row <= rowMax; row++) {
+      for (let col = drawColMin; col <= drawColMax; col++) {
+        for (let row = drawRowMin; row <= drawRowMax; row++) {
 
           // Tile corners in map (RD) coordinates
           const tileLeft   = ORIGIN[0] + col * tileSizeMeters;
@@ -362,8 +381,9 @@
 
       const col = Math.floor((coord[0] - ORIGIN[0]) / tileSizeMeters);
       const row = Math.floor((ORIGIN[1] - coord[1]) / tileSizeMeters);
+      const maxTileIndex = getMaxTileIndex(zoomLevel);
 
-      if (col < 0 || row < 0) return; // outside grid
+      if (col < 0 || row < 0 || col > maxTileIndex || row > maxTileIndex) return; // outside grid
 
       const xMin = ORIGIN[0] + col * tileSizeMeters;
       const xMax = xMin + tileSizeMeters;
